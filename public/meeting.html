@@ -81,21 +81,27 @@
   }
   #controls {
     display: flex;
+    align-items: center;
     justify-content: center;
+    flex-wrap: wrap;
     gap: 12px;
     padding: 14px;
     background: #111827;
   }
   #controls button {
     margin-top: 0;
+    font-size: 1rem;
+  }
+  .iconBtn {
     border-radius: 50%;
     width: 50px;
     height: 50px;
     font-size: 1.2rem;
+    padding: 0;
   }
-  #controls button.off { background: #c0392b; }
-  #leaveBtn { border-radius: 8px; width: auto; background: #c0392b; }
-  #gpsBtn { border-radius: 8px; width: auto; font-size: 0.9rem; background: #0ea5e9; }
+  .iconBtn.off { background: #c0392b; }
+  #leaveBtn { border-radius: 8px; background: #c0392b; padding: 10px 20px; }
+  #gpsBtn { border-radius: 8px; background: #0ea5e9; padding: 10px 20px; white-space: nowrap; }
 
   #participantsPanel {
     background: #111827;
@@ -135,8 +141,8 @@
   </div>
   <div id="videos"></div>
   <div id="controls">
-    <button id="micBtn" title="Mute/unmute">🎤</button>
-    <button id="camBtn" title="Camera on/off">📷</button>
+    <button id="micBtn" class="iconBtn" title="Mute/unmute">🎤</button>
+    <button id="camBtn" class="iconBtn" title="Camera on/off">📷</button>
     <button id="gpsBtn">📍 Share My GPS Location</button>
     <button id="leaveBtn">Leave Meeting</button>
   </div>
