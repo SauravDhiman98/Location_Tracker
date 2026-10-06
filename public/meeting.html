@@ -95,6 +95,18 @@
   }
   #controls button.off { background: #c0392b; }
   #leaveBtn { border-radius: 8px; width: auto; background: #c0392b; }
+  #gpsBtn { border-radius: 8px; width: auto; font-size: 0.9rem; background: #0ea5e9; }
+
+  #participantsPanel {
+    background: #111827;
+    padding: 10px 16px;
+    font-size: 0.85rem;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  #participantsPanel ul { list-style: none; margin: 4px 0 0; padding: 0; }
+  #participantsPanel li { margin-bottom: 2px; color: #cbd5e1; }
+  #participantsPanel .label { color: #64748b; }
 </style>
 </head>
 <body>
@@ -107,14 +119,25 @@
     <input type="text" id="nameInput" placeholder="Enter your name" maxlength="40" />
     <br />
     <button id="joinBtn" disabled>Join Meeting</button>
+    <p style="font-size:0.8rem; color:#777; margin-top:16px; text-align:left;">
+      ℹ️ Joining shares your name and video/audio with everyone in the call. Your IP address
+      (and a rough, city-level location derived from it) is visible to the host. After joining,
+      you can optionally share your exact GPS location too — you'll get a separate, clear
+      permission prompt for that and can decline it.
+    </p>
   </div>
 </div>
 
 <div id="call">
+  <div id="participantsPanel">
+    <strong>Participants</strong>
+    <ul id="participantsInfo"></ul>
+  </div>
   <div id="videos"></div>
   <div id="controls">
     <button id="micBtn" title="Mute/unmute">🎤</button>
     <button id="camBtn" title="Camera on/off">📷</button>
+    <button id="gpsBtn">📍 Share My GPS Location</button>
     <button id="leaveBtn">Leave Meeting</button>
   </div>
 </div>
@@ -132,7 +155,9 @@
   const videosEl = document.getElementById('videos');
   const micBtn = document.getElementById('micBtn');
   const camBtn = document.getElementById('camBtn');
+  const gpsBtn = document.getElementById('gpsBtn');
   const leaveBtn = document.getElementById('leaveBtn');
+  const participantsInfoEl = document.getElementById('participantsInfo');
 
   if (!meetingId) {
     lobbyStatus.textContent = 'No meeting id found in the link.';
@@ -140,8 +165,11 @@
 
   const socket = io();
   const peers = new Map(); // peerId -> RTCPeerConnection
+  const participantData = new Map(); // peerId -> { name, ip, ipLocation, gps }
   let localStream = null;
   let joined = false;
+  let selfId = null;
+  let myName = '';
 
   const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -231,16 +259,24 @@
     }
 
     addVideoTile('self', localStream, `${name} (You)`, true);
+    myName = name;
     socket.emit('meeting:join', { meetingId, name });
   });
 
-  socket.on('meeting:joined', ({ selfId, participants }) => {
+  socket.on('meeting:joined', (payload) => {
+    selfId = payload.selfId;
     joined = true;
     lobbyEl.style.display = 'none';
     callEl.style.display = 'flex';
 
+    participantData.set(selfId, { name: `${myName} (You)`, ip: 'resolving…', ipLocation: null, gps: null });
+    for (const p of payload.participants) {
+      participantData.set(p.id, { name: p.name, ip: p.ip, ipLocation: p.ipLocation, gps: p.gps });
+    }
+    renderParticipantsPanel();
+
     // We are the newcomer: create an offer to each existing participant
-    for (const p of participants) {
+    for (const p of payload.participants) {
       const pc = createPeerConnection(p.id, p.name);
       pc.createOffer()
         .then((offer) => pc.setLocalDescription(offer).then(() => offer))
@@ -250,11 +286,36 @@
     }
   });
 
-  socket.on('meeting:participant-joined', ({ id, name }) => {
-    // A new peer will send us an offer; just remember their name for the tile label
-    socket.data = socket.data || {};
+  socket.on('meeting:participant-joined', ({ id, name, ip }) => {
     pendingNames.set(id, name);
+    participantData.set(id, { name, ip, ipLocation: null, gps: null });
+    renderParticipantsPanel();
   });
+
+  socket.on('meeting:participant-updated', ({ id, ipLocation, gps }) => {
+    const existing = participantData.get(id) || {};
+    if (ipLocation !== undefined) existing.ipLocation = ipLocation;
+    if (gps !== undefined) existing.gps = gps;
+    participantData.set(id, existing);
+    renderParticipantsPanel();
+  });
+
+  function formatIpLocation(loc) {
+    if (!loc) return 'resolving…';
+    return `${loc.city || '?'}, ${loc.region || '?'}, ${loc.country || '?'} (approx.)`;
+  }
+
+  function renderParticipantsPanel() {
+    participantsInfoEl.innerHTML = '';
+    for (const [id, p] of participantData.entries()) {
+      const li = document.createElement('li');
+      const gpsText = p.gps
+        ? `GPS: ${p.gps.lat.toFixed(5)}, ${p.gps.lng.toFixed(5)} (±${Math.round(p.gps.accuracy)}m)`
+        : 'GPS: not shared';
+      li.innerHTML = `<strong>${p.name}</strong> — <span class="label">IP ${p.ip || '?'}, ${formatIpLocation(p.ipLocation)} · ${gpsText}</span>`;
+      participantsInfoEl.appendChild(li);
+    }
+  }
 
   const pendingNames = new Map();
 
@@ -281,6 +342,8 @@
     if (pc) pc.close();
     peers.delete(id);
     removeVideoTile(id);
+    participantData.delete(id);
+    renderParticipantsPanel();
   });
 
   micBtn.addEventListener('click', () => {
@@ -297,6 +360,33 @@
     if (!track) return;
     track.enabled = !track.enabled;
     camBtn.classList.toggle('off', !track.enabled);
+  });
+
+  gpsBtn.addEventListener('click', () => {
+    if (!navigator.geolocation) {
+      gpsBtn.textContent = 'Geolocation not supported';
+      return;
+    }
+    gpsBtn.disabled = true;
+    gpsBtn.textContent = 'Requesting permission…';
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude, accuracy } = pos.coords;
+        socket.emit('meeting:gps', { lat: latitude, lng: longitude, accuracy });
+        if (selfId) {
+          const existing = participantData.get(selfId) || { name: 'You' };
+          existing.gps = { lat: latitude, lng: longitude, accuracy, updatedAt: Date.now() };
+          participantData.set(selfId, existing);
+          renderParticipantsPanel();
+        }
+        gpsBtn.textContent = '📍 Location Shared';
+      },
+      () => {
+        gpsBtn.disabled = false;
+        gpsBtn.textContent = '❌ Permission denied — retry?';
+      },
+      { enableHighAccuracy: true, timeout: 15000 }
+    );
   });
 
   function leave() {

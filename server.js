@@ -64,13 +64,45 @@ app.post('/api/stop', (req, res) => {
 // Meetings (video/audio calls via WebRTC, signaled through Socket.IO)
 // ---------------------------------------------------------------------------
 
-// Map<meetingId, Map<socketId, { name }>>
+// Map<meetingId, Map<socketId, { name, ip, ipLocation, gps }>>
 const meetings = new Map();
 
 function getParticipants(meetingId) {
   const room = meetings.get(meetingId);
   if (!room) return [];
-  return [...room.entries()].map(([id, data]) => ({ id, name: data.name }));
+  return [...room.entries()].map(([id, data]) => ({
+    id,
+    name: data.name,
+    ip: data.ip,
+    ipLocation: data.ipLocation || null,
+    gps: data.gps || null,
+  }));
+}
+
+// Best-effort, free IP -> rough city/region/country lookup (no API key needed).
+// This is approximate (often off by tens/hundreds of km) and is a fallback only.
+async function lookupIpLocation(ip) {
+  try {
+    const res = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,regionName,city,lat,lon,isp`);
+    const data = await res.json();
+    if (data.status !== 'success') return null;
+    return {
+      city: data.city,
+      region: data.regionName,
+      country: data.country,
+      isp: data.isp,
+      lat: data.lat,
+      lon: data.lon,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getClientIp(socket) {
+  const forwarded = socket.handshake.headers['x-forwarded-for'];
+  const raw = forwarded ? forwarded.split(',')[0].trim() : socket.handshake.address;
+  return raw ? raw.replace('::ffff:', '') : null;
 }
 
 // Create a new meeting and return its id
@@ -91,14 +123,15 @@ io.on('connection', (socket) => {
   });
 
   // Actually join the call
-  socket.on('meeting:join', ({ meetingId, name }) => {
+  socket.on('meeting:join', async ({ meetingId, name }) => {
     if (!meetingId || !name) return;
     if (!meetings.has(meetingId)) meetings.set(meetingId, new Map());
 
     const room = meetings.get(meetingId);
     const existingParticipants = getParticipants(meetingId);
+    const ip = getClientIp(socket);
 
-    room.set(socket.id, { name: String(name).slice(0, 40) });
+    room.set(socket.id, { name: String(name).slice(0, 40), ip, ipLocation: null, gps: null });
     socket.data.meetingId = meetingId;
     socket.data.name = name;
     socket.join(`meeting-${meetingId}`);
@@ -107,8 +140,32 @@ io.on('connection', (socket) => {
     socket.emit('meeting:joined', { selfId: socket.id, participants: existingParticipants });
 
     // Tell everyone else (in call + lobby watchers) about the new participant
-    socket.to(`meeting-${meetingId}`).emit('meeting:participant-joined', { id: socket.id, name });
+    socket.to(`meeting-${meetingId}`).emit('meeting:participant-joined', { id: socket.id, name, ip });
     io.to(`lobby-${meetingId}`).emit('lobby:update', { participants: getParticipants(meetingId) });
+
+    // Resolve approximate IP-based location in the background, then broadcast it
+    const ipLocation = await lookupIpLocation(ip);
+    if (room.has(socket.id)) {
+      room.get(socket.id).ipLocation = ipLocation;
+      io.to(`meeting-${meetingId}`).to(`lobby-${meetingId}`).emit('meeting:participant-updated', {
+        id: socket.id,
+        ipLocation,
+      });
+    }
+  });
+
+  // Receive an explicit, user-granted precise GPS location for this participant
+  socket.on('meeting:gps', ({ lat, lng, accuracy }) => {
+    const meetingId = socket.data.meetingId;
+    if (!meetingId || typeof lat !== 'number' || typeof lng !== 'number') return;
+    const room = meetings.get(meetingId);
+    if (!room || !room.has(socket.id)) return;
+
+    room.get(socket.id).gps = { lat, lng, accuracy, updatedAt: Date.now() };
+    io.to(`meeting-${meetingId}`).to(`lobby-${meetingId}`).emit('meeting:participant-updated', {
+      id: socket.id,
+      gps: room.get(socket.id).gps,
+    });
   });
 
   // Relay WebRTC signaling data (offers/answers/ICE candidates) between peers
