@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Family Live Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  html, body { height: 100%; margin: 0; font-family: system-ui, Arial, sans-serif; }
+  #map { height: 100%; width: 100%; }
+  #panel {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 1000;
+    background: white;
+    padding: 10px 14px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    font-size: 0.9rem;
+    max-width: 240px;
+  }
+  #panel h2 { font-size: 1rem; margin: 0 0 6px; }
+  #panel ul { list-style: none; margin: 0; padding: 0; }
+  #panel li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h2>Live Family Locations</h2>
+  <ul id="list"><li>Loading…</li></ul>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const map = L.map('map').setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(map);
+
+  const markers = new Map(); // deviceId -> L.marker
+  let hasFitBounds = false;
+
+  async function refresh() {
+    let data = [];
+    try {
+      const res = await fetch('/api/locations');
+      data = await res.json();
+    } catch (e) {
+      return;
+    }
+
+    const list = document.getElementById('list');
+    list.innerHTML = data.length === 0 ? '<li>No one is sharing right now.</li>' : '';
+
+    const seen = new Set();
+    for (const loc of data) {
+      seen.add(loc.deviceId);
+      const latLng = [loc.lat, loc.lng];
+
+      if (markers.has(loc.deviceId)) {
+        markers.get(loc.deviceId).setLatLng(latLng)
+          .setPopupContent(`${loc.label}<br>${new Date(loc.updatedAt).toLocaleTimeString()}`);
+      } else {
+        const marker = L.marker(latLng).addTo(map)
+          .bindPopup(`${loc.label}<br>${new Date(loc.updatedAt).toLocaleTimeString()}`);
+        markers.set(loc.deviceId, marker);
+      }
+
+      const li = document.createElement('li');
+      li.textContent = `${loc.label} — updated ${new Date(loc.updatedAt).toLocaleTimeString()}`;
+      list.appendChild(li);
+    }
+
+    // Remove markers for devices that stopped sharing / went stale
+    for (const [deviceId, marker] of markers.entries()) {
+      if (!seen.has(deviceId)) {
+        map.removeLayer(marker);
+        markers.delete(deviceId);
+      }
+    }
+
+    if (!hasFitBounds && data.length > 0) {
+      const bounds = L.latLngBounds(data.map(l => [l.lat, l.lng]));
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+      hasFitBounds = true;
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 5000);
+</script>
+</body>
+</html>

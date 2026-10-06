@@ -1,0 +1,12 @@
+{
+  "name": "location-tracker",
+  "version": "1.0.0",
+  "description": "A small family location-sharing web app. Opening the shared link asks for location permission and streams live location to a map dashboard.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

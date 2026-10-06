@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Family Location Sharing</title>
+<style>
+  body {
+    font-family: system-ui, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    margin: 0;
+    background: #f4f6f8;
+    text-align: center;
+    padding: 24px;
+    box-sizing: border-box;
+  }
+  .card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    padding: 32px;
+    max-width: 420px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 8px; }
+  p { color: #555; line-height: 1.5; }
+  .status {
+    margin-top: 16px;
+    font-weight: 600;
+  }
+  .status.active { color: #1a7f37; }
+  .status.denied { color: #c0392b; }
+  .status.pending { color: #b8860b; }
+  button {
+    margin-top: 16px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    background: #2563eb;
+    color: white;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  button:disabled { background: #999; cursor: default; }
+  button.stop { background: #c0392b; }
+  input[type="text"] {
+    margin-top: 12px;
+    padding: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>📍 Share Your Location</h1>
+    <p>This shares your live location with your family so they can see where you are. It only works while this page stays open, and you can stop anytime.</p>
+    <input type="text" id="label" placeholder="Your name (optional)" />
+    <br />
+    <button id="startBtn">Start Sharing Location</button>
+    <button id="stopBtn" class="stop" style="display:none;">Stop Sharing</button>
+    <div id="status" class="status"></div>
+  </div>
+
+<script>
+  const statusEl = document.getElementById('status');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const labelInput = document.getElementById('label');
+
+  // Persistent per-device id so repeated updates move the same marker
+  let deviceId = localStorage.getItem('deviceId');
+  if (!deviceId) {
+    deviceId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
+    localStorage.setItem('deviceId', deviceId);
+  }
+
+  let watchId = null;
+
+  function sendLocation(position) {
+    const { latitude, longitude, accuracy } = position.coords;
+    fetch('/api/location', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId,
+        label: labelInput.value.trim(),
+        lat: latitude,
+        lng: longitude,
+        accuracy,
+      }),
+    }).catch(() => {});
+    statusEl.textContent = `✅ Sharing live location (accuracy ~${Math.round(accuracy)}m)`;
+    statusEl.className = 'status active';
+  }
+
+  function handleError(err) {
+    if (err.code === err.PERMISSION_DENIED) {
+      statusEl.textContent = '❌ Location permission denied. Sharing cannot work without it.';
+    } else {
+      statusEl.textContent = `⚠️ Error getting location: ${err.message}`;
+    }
+    statusEl.className = 'status denied';
+    startBtn.style.display = 'inline-block';
+    stopBtn.style.display = 'none';
+  }
+
+  startBtn.addEventListener('click', () => {
+    if (!navigator.geolocation) {
+      statusEl.textContent = 'Geolocation is not supported by this browser.';
+      statusEl.className = 'status denied';
+      return;
+    }
+    statusEl.textContent = 'Requesting permission…';
+    statusEl.className = 'status pending';
+
+    watchId = navigator.geolocation.watchPosition(sendLocation, handleError, {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 15000,
+    });
+
+    startBtn.style.display = 'none';
+    stopBtn.style.display = 'inline-block';
+  });
+
+  stopBtn.addEventListener('click', () => {
+    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    fetch('/api/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId }),
+    }).catch(() => {});
+    statusEl.textContent = 'Sharing stopped.';
+    statusEl.className = 'status';
+    startBtn.style.display = 'inline-block';
+    stopBtn.style.display = 'none';
+  });
+
+  // Stop sharing automatically if the tab/page is closed
+  window.addEventListener('beforeunload', () => {
+    navigator.sendBeacon('/api/stop', JSON.stringify({ deviceId }));
+  });
+</script>
+</body>
+</html>
