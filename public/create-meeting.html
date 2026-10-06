@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Start a Meeting</title>
+<style>
+  body {
+    font-family: system-ui, Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    margin: 0;
+    background: #0f172a;
+    text-align: center;
+  }
+  .card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    padding: 32px;
+    max-width: 420px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 8px; color: #1e293b; }
+  p { color: #555; line-height: 1.5; }
+  button {
+    margin-top: 16px;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 8px;
+    background: #2563eb;
+    color: white;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  button:disabled { background: #999; }
+  #linkBox {
+    margin-top: 20px;
+    word-break: break-all;
+    background: #f1f5f9;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    display: none;
+  }
+  #linkBox a { color: #2563eb; }
+  .copyBtn {
+    margin-top: 10px;
+    background: #16a34a;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎥 Start a Meeting</h1>
+    <p>Create a video meeting link, then share it with whoever you want to join. They'll see who's already in the call before joining.</p>
+    <button id="createBtn">Create Meeting</button>
+    <div id="linkBox">
+      <div id="linkText"></div>
+      <button class="copyBtn" id="copyBtn">Copy Link</button>
+    </div>
+  </div>
+
+<script>
+  const createBtn = document.getElementById('createBtn');
+  const linkBox = document.getElementById('linkBox');
+  const linkText = document.getElementById('linkText');
+  const copyBtn = document.getElementById('copyBtn');
+
+  createBtn.addEventListener('click', async () => {
+    createBtn.disabled = true;
+    createBtn.textContent = 'Creating…';
+    try {
+      const res = await fetch('/api/meetings', { method: 'POST' });
+      const { meetingId } = await res.json();
+      const url = `${location.origin}/meeting.html?id=${meetingId}`;
+      linkText.innerHTML = `<a href="${url}" target="_blank">${url}</a>`;
+      linkBox.style.display = 'block';
+      copyBtn.onclick = () => navigator.clipboard.writeText(url);
+      createBtn.textContent = 'Create Another Meeting';
+      createBtn.disabled = false;
+    } catch (e) {
+      createBtn.textContent = 'Something went wrong — try again';
+      createBtn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

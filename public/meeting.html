@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Meeting</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: system-ui, Arial, sans-serif; background: #0f172a; color: #e2e8f0; }
+
+  /* ---------- Lobby ---------- */
+  #lobby {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+    box-sizing: border-box;
+  }
+  .card {
+    background: white;
+    color: #1e293b;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    padding: 32px;
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+  }
+  .card h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .card p { color: #555; line-height: 1.4; }
+  #participantList {
+    text-align: left;
+    background: #f1f5f9;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 16px 0;
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  #participantList li { margin-bottom: 4px; }
+  input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    box-sizing: border-box;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 1rem;
+  }
+  button {
+    margin-top: 14px;
+    padding: 10px 24px;
+    border: none;
+    border-radius: 8px;
+    background: #2563eb;
+    color: white;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  button:disabled { background: #999; cursor: default; }
+
+  /* ---------- Call ---------- */
+  #call { display: none; height: 100vh; flex-direction: column; }
+  #videos {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+    padding: 8px;
+    overflow-y: auto;
+  }
+  .tile { position: relative; background: #1e293b; border-radius: 10px; overflow: hidden; }
+  .tile video { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
+  .tile .name {
+    position: absolute;
+    bottom: 6px;
+    left: 8px;
+    background: rgba(0,0,0,0.55);
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+  }
+  #controls {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    padding: 14px;
+    background: #111827;
+  }
+  #controls button {
+    margin-top: 0;
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    font-size: 1.2rem;
+  }
+  #controls button.off { background: #c0392b; }
+  #leaveBtn { border-radius: 8px; width: auto; background: #c0392b; }
+</style>
+</head>
+<body>
+
+<div id="lobby">
+  <div class="card">
+    <h1>🎥 Join Meeting</h1>
+    <p id="lobbyStatus">Checking who's already here…</p>
+    <ul id="participantList"></ul>
+    <input type="text" id="nameInput" placeholder="Enter your name" maxlength="40" />
+    <br />
+    <button id="joinBtn" disabled>Join Meeting</button>
+  </div>
+</div>
+
+<div id="call">
+  <div id="videos"></div>
+  <div id="controls">
+    <button id="micBtn" title="Mute/unmute">🎤</button>
+    <button id="camBtn" title="Camera on/off">📷</button>
+    <button id="leaveBtn">Leave Meeting</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const params = new URLSearchParams(location.search);
+  const meetingId = params.get('id');
+  const lobbyStatus = document.getElementById('lobbyStatus');
+  const participantListEl = document.getElementById('participantList');
+  const nameInput = document.getElementById('nameInput');
+  const joinBtn = document.getElementById('joinBtn');
+  const lobbyEl = document.getElementById('lobby');
+  const callEl = document.getElementById('call');
+  const videosEl = document.getElementById('videos');
+  const micBtn = document.getElementById('micBtn');
+  const camBtn = document.getElementById('camBtn');
+  const leaveBtn = document.getElementById('leaveBtn');
+
+  if (!meetingId) {
+    lobbyStatus.textContent = 'No meeting id found in the link.';
+  }
+
+  const socket = io();
+  const peers = new Map(); // peerId -> RTCPeerConnection
+  let localStream = null;
+  let joined = false;
+
+  const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+  function renderLobby(participants) {
+    participantListEl.innerHTML = '';
+    if (participants.length === 0) {
+      lobbyStatus.textContent = "You'll be the first one here.";
+    } else {
+      lobbyStatus.textContent = `${participants.length} ${participants.length === 1 ? 'person is' : 'people are'} already in this meeting:`;
+      for (const p of participants) {
+        const li = document.createElement('li');
+        li.textContent = p.name;
+        participantListEl.appendChild(li);
+      }
+    }
+    joinBtn.disabled = false;
+  }
+
+  function addVideoTile(id, stream, name, muted) {
+    let tile = document.getElementById(`tile-${id}`);
+    if (!tile) {
+      tile = document.createElement('div');
+      tile.className = 'tile';
+      tile.id = `tile-${id}`;
+      tile.innerHTML = `<video autoplay playsinline ${muted ? 'muted' : ''}></video><div class="name"></div>`;
+      videosEl.appendChild(tile);
+    }
+    tile.querySelector('video').srcObject = stream;
+    tile.querySelector('.name').textContent = name;
+  }
+
+  function removeVideoTile(id) {
+    const tile = document.getElementById(`tile-${id}`);
+    if (tile) tile.remove();
+  }
+
+  function createPeerConnection(peerId, peerName) {
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    peers.set(peerId, pc);
+
+    if (localStream) {
+      for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+    }
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        socket.emit('meeting:signal', { to: peerId, data: { type: 'candidate', candidate: e.candidate } });
+      }
+    };
+
+    pc.ontrack = (e) => {
+      addVideoTile(peerId, e.streams[0], peerName, false);
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+        removeVideoTile(peerId);
+        peers.delete(peerId);
+      }
+    };
+
+    return pc;
+  }
+
+  // --- Lobby: peek at participants before joining ---
+  if (meetingId) {
+    socket.emit('lobby:peek', meetingId);
+  }
+  socket.on('lobby:update', ({ participants }) => {
+    if (!joined) renderLobby(participants);
+  });
+
+  joinBtn.addEventListener('click', async () => {
+    const name = nameInput.value.trim();
+    if (!name) { nameInput.focus(); return; }
+
+    joinBtn.disabled = true;
+    joinBtn.textContent = 'Requesting camera/mic…';
+
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    } catch (err) {
+      lobbyStatus.textContent = '❌ Camera/microphone permission is required to join.';
+      joinBtn.disabled = false;
+      joinBtn.textContent = 'Join Meeting';
+      return;
+    }
+
+    addVideoTile('self', localStream, `${name} (You)`, true);
+    socket.emit('meeting:join', { meetingId, name });
+  });
+
+  socket.on('meeting:joined', ({ selfId, participants }) => {
+    joined = true;
+    lobbyEl.style.display = 'none';
+    callEl.style.display = 'flex';
+
+    // We are the newcomer: create an offer to each existing participant
+    for (const p of participants) {
+      const pc = createPeerConnection(p.id, p.name);
+      pc.createOffer()
+        .then((offer) => pc.setLocalDescription(offer).then(() => offer))
+        .then((offer) => {
+          socket.emit('meeting:signal', { to: p.id, data: { type: 'offer', sdp: offer } });
+        });
+    }
+  });
+
+  socket.on('meeting:participant-joined', ({ id, name }) => {
+    // A new peer will send us an offer; just remember their name for the tile label
+    socket.data = socket.data || {};
+    pendingNames.set(id, name);
+  });
+
+  const pendingNames = new Map();
+
+  socket.on('meeting:signal', async ({ from, data }) => {
+    let pc = peers.get(from);
+
+    if (data.type === 'offer') {
+      if (!pc) pc = createPeerConnection(from, pendingNames.get(from) || 'Guest');
+      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('meeting:signal', { to: from, data: { type: 'answer', sdp: answer } });
+    } else if (data.type === 'answer') {
+      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    } else if (data.type === 'candidate') {
+      if (pc) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch (e) {}
+      }
+    }
+  });
+
+  socket.on('meeting:participant-left', ({ id }) => {
+    const pc = peers.get(id);
+    if (pc) pc.close();
+    peers.delete(id);
+    removeVideoTile(id);
+  });
+
+  micBtn.addEventListener('click', () => {
+    if (!localStream) return;
+    const track = localStream.getAudioTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    micBtn.classList.toggle('off', !track.enabled);
+  });
+
+  camBtn.addEventListener('click', () => {
+    if (!localStream) return;
+    const track = localStream.getVideoTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    camBtn.classList.toggle('off', !track.enabled);
+  });
+
+  function leave() {
+    socket.emit('meeting:leave');
+    for (const pc of peers.values()) pc.close();
+    peers.clear();
+    if (localStream) localStream.getTracks().forEach((t) => t.stop());
+    location.href = '/create-meeting.html';
+  }
+
+  leaveBtn.addEventListener('click', leave);
+  window.addEventListener('beforeunload', () => socket.emit('meeting:leave'));
+</script>
+</body>
+</html>

@@ -13,19 +13,23 @@
     justify-content: center;
     min-height: 100vh;
     margin: 0;
-    background: #f4f6f8;
     text-align: center;
     padding: 24px;
     box-sizing: border-box;
+    background-color: #0f172a;
+    background-image: linear-gradient(rgba(15, 23, 42, 0.3), rgba(15, 23, 42, 0.3));
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
   }
   .card {
-    background: white;
+    background: rgba(0,0,0,0.2);
     border-radius: 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.25);
     padding: 32px;
     max-width: 420px;
   }
-  h1 { font-size: 1.4rem; margin-bottom: 8px; }
+  h1 { font-size: 1.6rem; margin-bottom: 8px; color: #1e293b; }
   p { color: #555; line-height: 1.5; }
   .status {
     margin-top: 16px;
@@ -59,12 +63,13 @@
 <body>
   <div class="card">
     <h1>📍 Share Your Location</h1>
-    <p>This shares your live location with your family so they can see where you are. It only works while this page stays open, and you can stop anytime.</p>
+    <p>This shares your live location so your friend can see where you are. It only works while this page stays open, and you can stop anytime.</p>
     <input type="text" id="label" placeholder="Your name (optional)" />
     <br />
     <button id="startBtn">Start Sharing Location</button>
     <button id="stopBtn" class="stop" style="display:none;">Stop Sharing</button>
     <div id="status" class="status"></div>
+    <p style="margin-top:20px;"><a href="/create-meeting.html">🎥 Or start a video meeting instead</a></p>
   </div>
 
 <script>
